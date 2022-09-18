@@ -51,7 +51,9 @@ class OneDFinger:
         F_f = 0.0  # F_d(y[3])  # 0.1
         y1p = (self.F_a(t) - self.F_d(y[1]) - F_f) / (self.m_finger + self.m_object)
 
-        y3p = (self.F_a(t) - self.F_d(y[3]) - F_f) / (self.m_finger + self.m_object)
+        y3p = (max(0.0, self.F_a(t) - self.F_d(y[3])) - F_f) / (
+            self.m_finger + self.m_object
+        )
 
         y_vector = [y[1], y1p, y[3], y3p]
         return y_vector
