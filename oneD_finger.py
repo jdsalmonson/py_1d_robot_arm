@@ -69,10 +69,13 @@ class OneDFinger:
         This function integrates the finger and object seperately.
         """
         F_f = 0.0
+        # v' (acceleration) of finger:
         v_fp = (self.F_a(t) - self.F_d(y[2])) / self.m_finger
 
+        # v' of object:
         v_op = -F_f / self.m_object
 
+        # v' of finger + object:
         # v_fop = (max(0.0, self.F_a(t) - self.F_d(y[2])) - F_f) / (self.m_finger + self.m_object)
         v_fop = (self.F_a(t) - self.F_d(y[2]) - F_f) / (self.m_finger + self.m_object)
 
@@ -94,31 +97,29 @@ class OneDFinger:
         """
 
         F_f = 0.0  # F_d(y[3])  # 0.1
+        # v' (accleration) of finger:
         v_fp = (self.F_a(t) - self.F_d(y[2])) / self.m_finger
 
+        # v' of object:
         v_op = -F_f / self.m_object
 
         # v_fop = (max(0.0, self.F_a(t) - self.F_d(y[2])) - F_f) / (
         #    self.m_finger + self.m_object
         # )
+        # v' of finger + object:
         v_fop = (self.F_a(t) - self.F_d(y[2]) - F_f) / (self.m_finger + self.m_object)
 
         # y_vector = [y[1], y1p, y[3], y3p]
         return [y[4], y[4], v_fp, v_op, v_fop]  # y_vector
 
-    @staticmethod
-    def decel(t, y):
-        """Sort of hokey condition for finger becoming slower than object"""
-        return y[3] - y[2] - 0.001  # y[0] - y[2]
+    def decel(self, t: float, y: list) -> float:
+        """If root of force eqn passes thru zero, finger and object go from compression to tension.
+        (Vice versa is excluded by initial conditions)
+        """
+        F_f = 0.0
+        return self.F_a(t) - self.F_d(y[2]) - F_f
 
     decel.terminal = True
-    # decel.direction = 1.0  # only trigger positive to negative
-
-    def decel2(self, t: float, y: list) -> float:
-        """Sort of hokey condition for finger becoming slower than object"""
-        return self.F_a(t) - self.F_d(y[2])
-
-    decel2.terminal = True
 
     def step(self, t0: list = None, y0: list = None, prev: int = 0):
         """Numerically integrate trajectories between object interaction events
@@ -135,7 +136,7 @@ class OneDFinger:
             y0 = self.y0
 
         if prev == 0:
-            print("0")
+            print(f"0 time: {t0[0]:.3}")
             ode = self.oneD_finger_n_obj
             t_range = t0
             y_init = y0
@@ -145,14 +146,14 @@ class OneDFinger:
             v_cm = self.v_cm(y0[2], y0[3])
             F_f = 0.0
             if self.F_a(t0[0]) - self.F_d(y0[2]) - F_f > 0.0:
-                print("2A")
+                print(f"2A {t0[0]:.3}")
                 ode = self.oneD_finger_n_obj_merged
                 t_range = t0
                 y_init = [y0[0], y0[1], v_cm, v_cm, v_cm]
-                events = self.decel2
+                events = self.decel
                 state = 2
             else:
-                print("1B")
+                print(f"1B {t0[0]:.3}")
                 ode = self.oneD_finger_n_obj
                 # semi-elastic bounce:
                 v_f = v_cm + self.K_elastic * (v_cm - y0[3])
@@ -165,7 +166,7 @@ class OneDFinger:
             # else set up 1
         elif prev == 2:
             # case where force between f & o has gone negative, but they are still merged (but not for long)
-            print("1")
+            print(f"1 {t0[0]:.3}")
             # velocity of merged finger and object
             v_cm = y0[4]
             ode = self.oneD_finger_n_obj
