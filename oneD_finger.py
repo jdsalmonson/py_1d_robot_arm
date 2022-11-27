@@ -399,7 +399,7 @@ if __name__ == "__main__":
         dense_output=True,
         # method="LSODA",
         # first_step=0.1,
-        events=odf.decel2,
+        events=odf.decel,
     )
 
     print("sol_ola2 events: ", sol_ola2.t_events)
@@ -452,7 +452,7 @@ if __name__ == "__main__":
         dense_output=True,
         # method="LSODA",
         # first_step=0.1,
-        events=odf.decel2,
+        events=odf.decel,
     )
 
     print("sol_ola4 events: ", sol_ola4.t_events)
