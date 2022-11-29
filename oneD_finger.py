@@ -177,7 +177,7 @@ class OneDFinger:
 
         # Solve until objects touch:
         sol_ola = solve_ivp(
-            self.oneD_finger_n_obj,
+            ode,
             t_range,
             y_init,
             dense_output=True,
