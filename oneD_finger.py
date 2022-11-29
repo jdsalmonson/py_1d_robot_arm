@@ -12,6 +12,7 @@ class OneDFinger:
         m_finger=1.0,
         m_object=1.0,
         K_elastic=0.5,
+        F_f=0.0,
         f_applied=None,
         t_i: float = 0.0,
         t_f: float = 10.0,
@@ -30,6 +31,7 @@ class OneDFinger:
           m_finger (float) mass of finger
           m_object (float) masss of object
           K_elastic (float) elastic collision parameter (K = 1: elastic, K = 0: inelastic)
+          F_f (float) frictional force on object
           t_i (float) initial time to start integration
           t_f (float) final time to end integration
           N (int) number of points at which to evaluate each sub-solution
@@ -38,6 +40,7 @@ class OneDFinger:
         self.m_finger = m_finger
         self.m_object = m_object
         self.K_elastic = K_elastic
+        self.F_f = F_f
 
         self.t_i = t_i
         self.t_f = t_f
@@ -68,16 +71,18 @@ class OneDFinger:
         """Function to return derivatives (RHS) of ODEs to be solved.
         This function integrates the finger and object seperately.
         """
-        F_f = 0.0
+
         # v' (acceleration) of finger:
         v_fp = (self.F_a(t) - self.F_d(y[2])) / self.m_finger
 
         # v' of object:
-        v_op = -F_f / self.m_object
+        v_op = -self.F_f * y[3] / self.m_object
 
         # v' of finger + object:
         # v_fop = (max(0.0, self.F_a(t) - self.F_d(y[2])) - F_f) / (self.m_finger + self.m_object)
-        v_fop = (self.F_a(t) - self.F_d(y[2]) - F_f) / (self.m_finger + self.m_object)
+        v_fop = (self.F_a(t) - self.F_d(y[2]) - self.F_f * y[3]) / (
+            self.m_finger + self.m_object
+        )
 
         return [y[2], y[3], v_fp, v_op, v_fop]  # [y[1], y1p, y[3], y3p]
 
@@ -96,18 +101,19 @@ class OneDFinger:
         Uses same equation for both.
         """
 
-        F_f = 0.0  # F_d(y[3])  # 0.1
         # v' (accleration) of finger:
         v_fp = (self.F_a(t) - self.F_d(y[2])) / self.m_finger
 
         # v' of object:
-        v_op = -F_f / self.m_object
+        v_op = -self.F_f * y[3] / self.m_object
 
         # v_fop = (max(0.0, self.F_a(t) - self.F_d(y[2])) - F_f) / (
         #    self.m_finger + self.m_object
         # )
         # v' of finger + object:
-        v_fop = (self.F_a(t) - self.F_d(y[2]) - F_f) / (self.m_finger + self.m_object)
+        v_fop = (self.F_a(t) - self.F_d(y[2]) - self.F_f * y[3]) / (
+            self.m_finger + self.m_object
+        )
 
         # y_vector = [y[1], y1p, y[3], y3p]
         return [y[4], y[4], v_fp, v_op, v_fop]  # y_vector
@@ -116,8 +122,7 @@ class OneDFinger:
         """If root of force eqn passes thru zero, finger and object go from compression to tension.
         (Vice versa is excluded by initial conditions)
         """
-        F_f = 0.0
-        return self.F_a(t) - self.F_d(y[2]) - F_f
+        return self.F_a(t) - self.F_d(y[2]) - self.F_f * y[3]
 
     decel.terminal = True
 
@@ -144,8 +149,7 @@ class OneDFinger:
             state = 1
         elif prev == 1:
             v_cm = self.v_cm(y0[2], y0[3])
-            F_f = 0.0
-            if self.F_a(t0[0]) - self.F_d(y0[2]) - F_f > 0.0:
+            if self.F_a(t0[0]) - self.F_d(y0[2]) - self.F_f * y0[3] > 0.0:
                 print(f"2A {t0[0]:.3}")
                 ode = self.oneD_finger_n_obj_merged
                 t_range = t0
