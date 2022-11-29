@@ -158,9 +158,6 @@ class OneDFinger:
                 # semi-elastic bounce:
                 v_f = v_cm + self.K_elastic * (v_cm - y0[2])
                 v_o = v_cm + self.K_elastic * (v_cm - y0[3])
-                print(
-                    f"v_cm: {v_cm:.3}, y0[2]: {y0[2]:.3}, y0[3]: {y0[3]:.3}, y0[4]: {y0[4]} v_f: {v_f:.3}, v_o: {v_o:.3}"
-                )
                 t_range = t0
                 y_init = [y0[0], y0[1], v_f, v_o, v_cm]
                 events = self.touch
