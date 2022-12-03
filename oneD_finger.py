@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from numpy import heaviside
 from functools import partial
@@ -134,13 +135,40 @@ class OneDFinger:
         # y_vector = [y[1], y1p, y[3], y3p]
         return [y[4], y[4], v_fp, v_op, v_fop]  # y_vector
 
+    # Delete this function: *****
     def decel(self, t: float, y: list) -> float:
         """If root of force eqn passes thru zero, finger and object go from compression to tension.
         (Vice versa is excluded by initial conditions)
         """
+        print(
+            "decel",
+            t,
+            y,
+            self.F_a(t) - self.F_d(y[2]) - self.F_f * y[3],
+            self.F_friction(y[3], np.Inf),
+        )
         return self.F_a(t) - self.F_d(y[2]) - self.F_f * y[3]
 
     decel.terminal = True
+
+    def decel2(self, t: float, y: list) -> float:
+        """If root of force eqn passes thru zero, finger and object go from compression to tension.
+        (Vice versa is excluded by initial conditions)
+        """
+        F_i = self.F_a(t) - self.F_d(y[2])
+        # Setting incident force fed to F_f to np.Inf allows F_i - F_f to swing thru zero:
+        F_f = self.F_friction(y[3], np.Inf)  # F_i)
+
+        print(
+            "decel2",
+            t,
+            y,
+            F_i,
+            F_f,
+        )
+        return F_i - F_f
+
+    decel2.terminal = True
 
     def step(self, t0: list = None, y0: list = None, prev: int = 0):
         """Numerically integrate trajectories between object interaction events
@@ -172,8 +200,18 @@ class OneDFinger:
                 ode = self.oneD_finger_n_obj_merged
                 t_range = t0
                 y_init = [y0[0], y0[1], v_cm, v_cm, v_cm]
-                events = self.decel
+                events = self.decel2  # self.decel
                 state = 2
+            elif F_i - F_f == 0.0:  # math.isclose(F_i - F_f, 0.0):
+                print(f"Static bounce: {t0[0]:.3}, {(F_i - F_f):.3}")
+                ode = self.oneD_finger_n_obj
+                v_f = -self.K_elastic * y0[2]
+                v_o = 0.0
+                v_cm = self.v_cm(v_f, v_o)
+                t_range = t0
+                y_init = [y0[0], y0[1], v_f, v_o, v_cm]
+                events = self.touch  # self.decel2
+                state = 1
             else:
                 print(f"Bounce: {t0[0]:.3}")
                 ode = self.oneD_finger_n_obj
