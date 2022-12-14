@@ -6,17 +6,19 @@ from scipy.integrate import solve_ivp
 
 import matplotlib.pyplot as plt
 
+# from rich import print
+
 
 class OneDFinger:
     def __init__(
         self,
         m_finger=1.0,
         m_object=1.0,
+        K_drag=1.0,
         K_elastic=0.5,
         F_static=1.0,
         F_kinetic=0.01,  # 0.1,
-        F_f=0.0,
-        f_applied=None,
+        x_merge_offset=1.0e-5,
         t_i: float = 0.0,
         t_f: float = 10.0,
         N: int = 20,
@@ -33,10 +35,11 @@ class OneDFinger:
         Args:
           m_finger (float) mass of finger
           m_object (float) masss of object
+          K_drag (float) drag coefficient
           K_elastic (float) elastic collision parameter (K = 1: elastic, K = 0: inelastic)
           F_static (float) static friction force when object is at rest
           F_kinetic (float) kinetic friction force when object is moving
-          F_f (float) frictional force on object
+          x_merge_offset (float) seperate f & o when they merge or bounce under tension
           t_i (float) initial time to start integration
           t_f (float) final time to end integration
           N (int) number of points at which to evaluate each sub-solution
@@ -44,10 +47,11 @@ class OneDFinger:
 
         self.m_finger = m_finger
         self.m_object = m_object
+        self.K_drag = K_drag
         self.K_elastic = K_elastic
         self.F_static = F_static
         self.F_kinetic = F_kinetic
-        self.F_f = F_f
+        self.x_merge_offset = x_merge_offset
 
         self.t_i = t_i
         self.t_f = t_f
@@ -70,26 +74,58 @@ class OneDFinger:
         """a particular applied force profile"""
         return heaviside(t - t0, 0.5) * heaviside(t1 - t, 0.5)
 
-    def F_d(self, v: float, k: float = 1.0) -> float:
+    def F_d(self, v: float) -> float:
         """simple drag Force"""
-        return k * v**2
+        return self.K_drag * v**2
 
-    def F_friction(self, y: list[float], F_i: float) -> float:
+    def F_friction(
+        self, y: list[float], F_i: float, v_idx: int = 1, atol: float = 1.0e-3
+    ) -> float:
         """Frictional force model
         Args:
           y (list) velocity for kinetic friction term
           F_i (float) incident force for static friction term
+          v_idx (int) index of velocity use for friction 0: finger, 1: object, 2: finger-object
+          atol (float) absolute tolerance for math.isclose()
         """
-        x_f, x_o, _, v_o, _ = y
+        x_f, x_o, _, v_o, v_fo = y
 
-        if math.isclose(v_o, 0.0, abs_tol=1.0e-3):  # v_o == 0.0:
+        # This works to hold static friction.
+        # But for Merged, the object velocity eventually becomes non-static, so the object starts to move.
+        # v_tmp = min(abs(v_o), abs(v_fo))
+        v_f = y[2 + v_idx]
+
+        # """
+        # vectorized version:
+        # If not touching, no friction.  Otherwise, friction matches incident force up to static friction limit.
+        # Subtract x_merge_offset from x_o to make "touching" more fuzzy, and thus more robust.
+        static_f = np.where(
+            np.less(x_f, x_o - self.x_merge_offset), 0.0, np.minimum(self.F_static, F_i)
+        )
+        # If object is not moving, friction is static.  Otherwise, friction is kinetic.
+        f_f = np.where(
+            np.isclose(v_f, 0.0, atol=atol), static_f, self.F_kinetic * v_f  # v_o
+        )
+        vf_f = f_f
+
+        # return f_f
+        # """
+
+        if math.isclose(v_f, 0.0, abs_tol=atol):  # v_o == 0.0:
             # If not touching, no friction:
-            if x_f < x_o:
-                return 0.0
+            if x_f < x_o - self.x_merge_offset:
+                sf_f = 0.0  # return 0.0
             else:
-                return min(self.F_static, F_i)
+                sf_f = min(self.F_static, F_i)  # return min(self.F_static, F_i)
         else:
-            return self.F_kinetic * v_o
+            sf_f = self.F_kinetic * v_f  # return self.F_kinetic * v_o
+
+        if sf_f != vf_f:
+            print(
+                f"sf_f: {sf_f:.5}, vf_f: {vf_f:.5} x_f: {x_f:.5}, x_o: {x_o:.5}, v_o: {v_o:.5}, F_i: {F_i:.5}"
+            )
+
+        return vf_f
 
     def oneD_finger_n_obj(self, t: float, y: list[float]) -> list[float]:
         """Function to return derivatives (RHS) of ODEs to be solved.
@@ -97,13 +133,13 @@ class OneDFinger:
         """
 
         F_i = self.F_a(t) - self.F_d(y[2])
-        F_f = self.F_friction(y, F_i)
+        F_f = self.F_friction(y, F_i, v_idx=1)
 
         # v' (acceleration) of finger:
         v_fp = F_i / self.m_finger
 
         # v' of object:
-        v_op = -self.F_friction(y, np.Inf) / self.m_object
+        v_op = -self.F_friction(y, np.Inf, v_idx=1) / self.m_object
 
         # v' of finger + object:
         # v_fop = (max(0.0, self.F_a(t) - self.F_d(y[2])) - F_f) / (self.m_finger + self.m_object)
@@ -126,14 +162,17 @@ class OneDFinger:
         Uses same equation for both.
         """
 
-        F_i = self.F_a(t) - self.F_d(y[2])
-        F_f = self.F_friction(y, F_i)
+        # When merged, the drag velocity should be that of the f+o rather than f only:
+        v_drag = y[4]  # y[2] would be finger velocity only
+        F_i = self.F_a(t) - self.F_d(v_drag)
+        F_f = self.F_friction(y, F_i, v_idx=2)
 
         # v' (accleration) of finger:
-        v_fp = (self.F_a(t) - self.F_d(y[2])) / self.m_finger
+        v_fp = (self.F_a(t) - self.F_d(v_drag)) / self.m_finger
 
         # v' of object:
-        v_op = -self.F_friction(y, np.Inf) / self.m_object
+        # v_op = -self.F_friction(y, np.Inf) / self.m_object
+        v_op = -self.F_friction(y, F_i, v_idx=2) / self.m_object
 
         # v_fop = (max(0.0, self.F_a(t) - self.F_d(y[2])) - F_f) / (
         #    self.m_finger + self.m_object
@@ -141,6 +180,11 @@ class OneDFinger:
         # v' of finger + object:
         v_fop = (F_i - F_f) / (self.m_finger + self.m_object)
 
+        # print(
+        #    f"  *Merged: t {t:.5}, y {y}, v_fp {v_fp:.5}, v_op {v_op:.5}, v_fop {v_fop:.5} F_i {F_i:.5} F_f {F_f:.5}"
+        #
+        #
+        # )
         # y_vector = [y[1], y1p, y[3], y3p]
         return [y[4], y[4], v_fp, v_op, v_fop]  # y_vector
 
@@ -148,9 +192,15 @@ class OneDFinger:
         """If root of force eqn passes thru zero, finger and object go from compression to tension.
         (Vice versa is excluded by initial conditions)
         """
-        F_i = self.F_a(t) - self.F_d(y[2])
+
+        # Since decel() is only called when f+o are merged, use y[4] for v_fop, instead of y[2] for v_fp:
+        F_i = self.F_a(t) - self.F_d(y[4])
+
+        # Delete this: ***************
         # Setting incident force fed to F_f to np.Inf allows F_i - F_f to swing thru zero:
-        F_f = self.F_friction(y, F_i)  # np.Inf)  # F_i)
+        F_f = self.F_friction(
+            y, F_i=np.Inf, v_idx=1, atol=1.0e-4
+        )  # F_i)  # np.Inf)  # F_i)
 
         """         
         print(
@@ -161,7 +211,17 @@ class OneDFinger:
             F_f,
         )
         """
-        return F_i - F_f  # + 1.0e-5
+
+        if math.isclose(y[4], 0.0, abs_tol=1.0e-5):
+            foo = 1.0
+        else:
+            foo = F_i - F_f
+        # print(
+        #    f" >decel {t:.5} {y} F_i = {F_i:.5} F_F = {F_f:.5} F_i - F_F = {(F_i - F_f):.5} foo = {foo}"
+        # )
+
+        # Subtract small value so zero-crossing is slightly in tension, thus f+o touching w/o force won't be flagged:
+        return F_i - 1.0e-5  # 1.0  # F_i - F_f + 1.0e-5  # foo
 
     decel.terminal = True
 
@@ -181,10 +241,12 @@ class OneDFinger:
 
         x_f0, x_o0, v_f0, v_o0, v_fo0 = y0
         v_cm = self.v_cm(v_f0, v_o0)
-        F_i = self.F_a(t0[0]) - self.F_d(v_f0)
+        # If previous step was merged, us f+o velocity, v_fo0, for drag:
+        v_drag = v_f0 if max(prev, 1) == 1 else v_fo0
+        F_i = self.F_a(t0[0]) - self.F_d(v_drag)
 
-        F_f = self.F_friction(y0, F_i)
-        print(f"\tF_i = {F_i:.3}, v_o0 = {v_o0:.3}, F_f = {F_f:.3} y = {y0}")
+        F_f = self.F_friction(y0, F_i, v_idx=max(prev, 1))
+        print(f"\t{t0[0]:.3} F_i = {F_i:.3}, v_o0 = {v_o0:.3}, F_f = {F_f:.3} y = {y0}")
 
         if prev == 0:
             print(f"Start: {t0[0]:.3}")
@@ -196,8 +258,11 @@ class OneDFinger:
         elif prev == 1:
 
             if math.isclose(
-                v_o0, 0.0, abs_tol=1.0e-3
+                v_o0,
+                0.0,
+                abs_tol=1.0e-3,  # TEST if x_merge_offset is too big, this tolerance may need to be increased (e.g. 2.0e-3)
             ):  # abs(v_o0) < 1.0e-3  # v_o0 == 0.0:
+
                 if F_i < F_f:
                     print(
                         f"Static bounce: {t0[0]:.3}, v_o0 = {v_o0:.3}, F_i - F_F = {(F_i - F_f):.3}"
@@ -211,6 +276,12 @@ class OneDFinger:
                     events = self.touch
                     state = 1
                 else:  # F_i >= F_f
+                    # TEST: since it is low, reset v_o0 to zero and recalc F_f
+                    # (Should this recalc of F_f happen before if F_i < F_f?)
+                    v_o0 = 0.0
+                    y0[3] = 0.0
+                    F_f = self.F_friction(y0, F_i, v_idx=max(prev, 1))
+
                     print(
                         f"Merge1: {t0[0]:.3}, v_o0 = {v_o0:.3}, F_i - F_F = {(F_i - F_f):.3}"
                     )
@@ -234,7 +305,7 @@ class OneDFinger:
                     v_f = v_cm + self.K_elastic * (v_cm - v_f0)
                     v_o = v_cm + self.K_elastic * (v_cm - v_o0)
                     t_range = t0
-                    y_init = [x_f0, x_o0, v_f, v_o, v_cm]
+                    y_init = [x_f0 - self.x_merge_offset, x_o0, v_f, v_o, v_cm]
                     events = self.touch
                     state = 1
                 else:  # F_i > F_min
@@ -249,12 +320,14 @@ class OneDFinger:
 
         elif prev == 2:
             # case where force between f & o has gone negative, but they are still merged (but not for long)
-            print(f"Merged tension: {t0[0]:.3} x_f0 = {x_f0:.3}, x_o0 = {x_o0:.3}")
+            print(
+                f"Merged tension: {t0[0]:.3} x_f0 = {x_f0:.3}, x_o0 = {x_o0:.3}, v_f0 = {v_f0:.5}, v_o0 = {v_o0:.5}, v_fo0 = {v_fo0:.5}"
+            )
             # velocity of merged finger and object
             v_cm = v_fo0  # y0[4]
             ode = self.oneD_finger_n_obj
             t_range = t0
-            y_init = [x_f0 - 1.0e-5, x_o0, v_cm, v_cm, v_cm]
+            y_init = [x_f0 - self.x_merge_offset, x_o0, v_cm, v_cm, v_cm]
             events = self.touch
             state = 1
 
@@ -265,6 +338,7 @@ class OneDFinger:
             y_init,
             dense_output=True,
             events=events,
+            # vectorized=True,
         )
 
         if len(sol_ola.t_events[0]):
@@ -279,6 +353,12 @@ class OneDFinger:
         t_sol = np.linspace(t0[0], t_end, self.N)
         y_sol = sol_ola.sol(t_sol)
 
+        # print(f"***t = {sol_ola.t}, message = {sol_ola.message}")
+        # print(
+        #    f"sol_ola.t_events = {sol_ola.t_events}, sol_ola.y_events = {sol_ola.y_events}"
+        # )
+
+        # return t_sol, y_sol, state, done
         return [t_end, t0[-1]], y_end, state, done, t_sol, y_sol, sol_ola
 
     def integrate(self):
