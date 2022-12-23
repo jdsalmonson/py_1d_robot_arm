@@ -6,7 +6,7 @@ from scipy.integrate import solve_ivp
 
 import matplotlib.pyplot as plt
 
-# from rich import print
+from rich import print
 
 
 class OneDFinger:
@@ -64,7 +64,10 @@ class OneDFinger:
     def v_cm(self, v_finger: float, v_object: float) -> float:
         """Return center of momentum of finger and object
         Args:
-          v_finger (float)
+          v_finger (float) velocity of finger
+          v_object (float) velocity of object
+        Returns:
+          v_cm (float) center of momentum velocity
         """
         return (self.m_finger * v_finger + self.m_object * v_object) / (
             self.m_finger + self.m_object
@@ -97,10 +100,12 @@ class OneDFinger:
 
         # """
         # vectorized version:
-        # If not touching, no friction.  Otherwise, friction matches incident force up to static friction limit.
+        # If not touching, no friction.  Otherwise, friction matches positive incident force up to static friction limit.
         # Subtract x_merge_offset from x_o to make "touching" more fuzzy, and thus more robust.
         static_f = np.where(
-            np.less(x_f, x_o - self.x_merge_offset), 0.0, np.minimum(self.F_static, F_i)
+            np.less(x_f, x_o - self.x_merge_offset),
+            0.0,
+            np.maximum(0.0, np.minimum(self.F_static, F_i)),
         )
         # If object is not moving, friction is static.  Otherwise, friction is kinetic.
         f_f = np.where(
@@ -110,7 +115,7 @@ class OneDFinger:
 
         # return f_f
         # """
-
+        """
         if math.isclose(v_f, 0.0, abs_tol=atol):  # v_o == 0.0:
             # If not touching, no friction:
             if x_f < x_o - self.x_merge_offset:
@@ -124,8 +129,97 @@ class OneDFinger:
             print(
                 f"sf_f: {sf_f:.5}, vf_f: {vf_f:.5} x_f: {x_f:.5}, x_o: {x_o:.5}, v_o: {v_o:.5}, F_i: {F_i:.5}"
             )
-
+        """
         return vf_f
+
+    def F_sensor_func(self, t, y):
+        """Calculate the force sensor reading at the finger tip.
+        Args:
+          t (array) time
+          y (array) [x_finger, x_object, v_finger, v_object, v_finger-object]
+          Returns:
+            F_sensor (array) force sensor reading
+        """
+
+        F_i = self.F_a(t) - self.F_d(y[4])
+        F_f = self.F_friction(y, F_i, v_idx=2)
+        F_sensor = np.where(np.isclose(y[0], y[1], atol=1.0e-4), F_f, 0.0)
+
+        # center-of-momentum velocity of the finger and object vs. time:
+        vt_cm = np.where(
+            np.isclose(y[0], y[1], atol=1.0e-3), y[4], self.v_cm(y[2], y[3])
+        )
+        # np.where(np.isclose(y[0], y[1], atol=1.e-3), 0.0, self.m_finger * (y[2] - vt_cm) * (1. + self.K_elastic))
+
+        # relative velocity of the finger and object:
+        dv = np.where(
+            np.isclose(y[0], y[1], atol=1.0e-3), 0.0, np.diff(y[2:4, :], axis=0)
+        )[0]
+
+        # Find the indices where the finger and object connect and detach:
+        i_connect = np.intersect1d(np.where(dv < 0.0)[0] + 1, np.where(dv == 0)[0])
+        i_detach = np.intersect1d(np.where(dv > 0.0)[0] - 1, np.where(dv == 0)[0])
+
+        # If connection is followed by detachment, then it will be a bounce:
+        i_intersect = np.intersect1d(i_connect, i_detach - 1)
+
+        # Connections followed by detachments are bounces, otherwise they are merges:
+        i_bounce = np.intersect1d(i_connect, i_intersect)
+        i_merge = np.setdiff1d(i_connect, i_intersect)
+        print("Force sensor bounces: ", t[i_bounce], "merges: ", t[i_merge])
+
+        for i_b in i_bounce:
+            # (v_finger - v_cm) * (1 + K_elastic) is the impulse of the finger on the object:
+            # = (v_finger - v_cm) going into the bounce + (v_finger - v_cm) * K_elastic coming out of the bounce.
+            """
+            print(
+                "i_b = ",
+                i_b,
+                (y[2] - vt_cm)[i_b - 2 : i_b + 2],
+                vt_cm[i_b - 2 : i_b + 2],
+                t[i_b - 2 : i_b + 2],
+                np.diff(t)[i_b - 1 : i_b + 2],
+            )
+            """
+            f_sensor_bounce = (
+                self.m_finger
+                * (y[2] - vt_cm)[i_b]
+                / np.sum(np.diff(t)[i_b - 1 : i_b + 2])
+                * (1.0 + self.K_elastic)
+            )
+            F_sensor[i_b] += f_sensor_bounce
+            if np.diff(t)[i_b] == 0.0:
+                F_sensor[i_b + 1] += f_sensor_bounce
+
+        for i_m in i_merge:
+
+            """
+            print(
+                "i_m = ",
+                i_m,
+                (y[2] - vt_cm)[i_m - 2 : i_m + 2],
+                vt_cm[i_m - 2 : i_m + 2],
+                t[i_m - 2 : i_m + 2],
+                np.diff(t)[i_m - 1 : i_m + 2],
+            )
+            """
+            if vt_cm[i_m + 1] == 0.0:
+                # If the object is immovable due to static friction, then it is effectively infinite mass,
+                # so the impulse velocity change is just the finger velocity before the merger: y[2],
+                # since the finger velocity after merger is 0.0,
+                # so set center-of-momentum velocity of merger to 0.0:
+                print(f"{i_m} merger cm velocity = 0.0")
+                vt_cm[i_m] = 0.0
+            f_sensor_merge = (
+                self.m_finger
+                * (y[2] - vt_cm)[i_m]
+                / np.sum(np.diff(t)[i_m - 1 : i_m + 2])
+            )
+            F_sensor[i_m] += f_sensor_merge
+            if np.diff(t)[i_m] == 0.0:
+                F_sensor[i_m + 1] += f_sensor_merge
+
+        return F_sensor
 
     def oneD_finger_n_obj(self, t: float, y: list[float]) -> list[float]:
         """Function to return derivatives (RHS) of ODEs to be solved.
@@ -246,7 +340,7 @@ class OneDFinger:
         F_i = self.F_a(t0[0]) - self.F_d(v_drag)
 
         F_f = self.F_friction(y0, F_i, v_idx=max(prev, 1))
-        print(f"\t{t0[0]:.3} F_i = {F_i:.3}, v_o0 = {v_o0:.3}, F_f = {F_f:.3} y = {y0}")
+        # print(f"\t{t0[0]:.3} F_i = {F_i:.3}, v_o0 = {v_o0:.3}, F_f = {F_f:.3} y = {y0}")
 
         if prev == 0:
             print(f"Start: {t0[0]:.3}")
@@ -363,7 +457,7 @@ class OneDFinger:
 
     def integrate(self):
         """
-        Step thru time range, t0, from initial condition y0.
+        Step thru time domain, t0, from initial condition y0.
 
         Returns:
           t, y: tuple of time and y arrays to be plotted: plt.plot(t, y.T)
@@ -386,138 +480,6 @@ class OneDFinger:
         return np.hstack(t_sol_lst), np.hstack(y_sol_lst)
 
 
-'''
-def oneD_finger(t, y, F_a, m=1.0, k=1.0):
-    y1p = (F_a(t) - k * (y[1] ** 2)) / m
-    return [y[1], y1p]
-
-
-def my_F_a(t, t0=1.0, t1=2.0):
-    """a particular applied force profile"""
-    return heaviside(t - t0, 0.5) * heaviside(t1 - t, 0.5)
-
-
-oneD_finger_instance = partial(oneD_finger, F_a=my_F_a)
-
-
-def F_d(v, k=1.0):
-    """simple drag Force"""
-    return k * v**2
-
-
-def dlt(x, X, eps=1.0e-3):
-    """delta(x > X) with fuzz"""
-    return heaviside(x + eps - X, 0.5)  # 1.0 if (X - x) < eps else 0.0
-
-
-def oneD_finger_n_obj(t, y, F_a, F_d, mf=1.0, mo=1.0):
-    dd = dlt(y[0], y[2])
-
-    F_f = 0.0  # F_d(y[3])  # 0.1
-    y1p = (F_a(t) - F_d(y[1]) - dd * F_f) / (mf + dd * mo)
-
-    y3p = (dd * (F_a(t) - F_d(y[1])) - F_f) / (dd * mf + mo)
-
-    """
-    # force object to have same x & x':
-    if dd:
-        y[3] = y[1]
-        y3p = y1p
-    """
-
-    # Need impulse term: when dd turns from 0 -> 1, y[1] = y[3] = (mf*y[1] + mo*y[3])/(mf+mo) = v_CM for full stickiness
-
-    if dd > oneD_finger_n_obj.dd0:
-        print(f"Yo: {t} {y[1]} {y[3]}, {y[0]} {y[2]}")
-        y[1] = y[3] = (mf * y[1] + mo * y[3]) / (mf + mo)  # set both to CM velocity
-        print(f"Yo2: {t} {y[1]} {y[3]}, {y[0]} {y[2]}")
-        # y3p = y1p # equate accelerations?
-        oneD_finger_n_obj.dd0 = dd
-
-    # print(f"   Yo3: {t:.4} {y[1]:.4} {y[3]:.4}, {y[0]:.4} {y[2]:.4}")
-
-    return [y[1], y1p, y[3], y3p]
-
-
-oneD_finger_n_obj_instance = partial(oneD_finger_n_obj, F_a=my_F_a, F_d=F_d)
-oneD_finger_n_obj.dd0 = 0
-
-
-def touch(t, y):
-    return y[0] - y[2]
-
-
-touch.terminal = True
-
-
-def oneD_finger_n_obj_merged(t, y, F_a, F_d, mf=1.0, mo=1.0):
-    """objects joined.  Use same equation"""
-
-    F_f = 0.0  # F_d(y[3])  # 0.1
-    y1p = (F_a(t) - F_d(y[1]) - F_f) / (mf + mo)
-
-    y3p = (F_a(t) - F_d(y[3]) - F_f) / (mf + mo)
-
-    y_vector = [y[1], y1p, y[3], y3p]
-    return y_vector
-
-
-oneD_finger_n_obj_merged_instance = partial(
-    oneD_finger_n_obj_merged, F_a=my_F_a, F_d=F_d
-)
-'''
-
-# sol_ola = solve_ivp(oneD_finger_instance, [0, 20], [0.0, 0.0], dense_output=True)
-"""
-# Solve until objects touch:
-sol_ola = solve_ivp(
-    oneD_finger_n_obj_instance,
-    [0, 10],
-    [0.0, 0.0, 1.5, 0.0],
-    dense_output=True,
-    events=touch,
-)
-
-t_end = sol_ola.t_events[0][0]
-t = np.linspace(0, t_end, 20)
-z = sol_ola.sol(t)
-
-# calculate merger
-y_ev = sol_ola.y_events[-1][0]
-v_cm = 0.5 * (y_ev[1] + y_ev[3])
-
-print("y_ev = ", y_ev)
-print(" event = ", sol_ola.t_events[-1][0])
-
-# Solve merged objects
-sol_ola2 = solve_ivp(
-    oneD_finger_n_obj_merged_instance,
-    [sol_ola.t_events[-1][0], 10],
-    [y_ev[0], v_cm, y_ev[2], v_cm],
-    dense_output=True,
-    # method="LSODA",
-    # first_step=0.1,
-    # events=touch,
-)
-
-t2 = np.linspace(sol_ola2.t[0], sol_ola2.t[-1], 20)
-z2 = sol_ola2.sol(t2)
-
-# t_end = sol_ola.t_events[0][0]
-it_end = np.abs(t - t_end).argmin() + 1
-print("event and solution:")
-print(t_end)
-print(sol_ola.sol(t_end))
-
-# plt.plot(t[:it_end], z.T[:it_end, ...])
-plt.plot(np.hstack([t, t2]), np.hstack([z, z2]).T)
-
-# plt.xlim([0, sol_ola.t_events[0][0]])
-# plt.plot(t, heaviside(1.0 - t, 0.5))
-
-plt.show()
-"""
-
 if __name__ == "__main__":
 
     def F_a(self, t, t0=1.0, t1=5.0):
@@ -529,101 +491,14 @@ if __name__ == "__main__":
     OneDFinger.F_a = F_a
 
     odf = OneDFinger()
+    # odf = OneDFinger(m_object = 0.3, F_static = 0.5, F_kinetic = 0.03, x_merge_of
 
-    # Solve until objects touch:
-    sol_ola = solve_ivp(
-        odf.oneD_finger_n_obj,
-        [0, 10],
-        odf.y0,  # [0.0, 0.0, 1.5, 0.0],
-        dense_output=True,
-        events=odf.touch,
-    )
+    t, y = odf.integrate()
 
-    t_end = sol_ola.t_events[0][0]
-    t = np.linspace(0, t_end, 20)
-    z = sol_ola.sol(t)
-
-    # calculate merger
-    y_ev = sol_ola.y_events[-1][0]
-    # v_cm = 0.5 * (y_ev[1] + y_ev[3])
-    v_cm = 0.5 * (y_ev[2] + y_ev[3])
-
-    print("y_ev = ", y_ev)
-    print(" event = ", sol_ola.t_events[-1][0])
-    print("sol_ola events: ", sol_ola.t_events)
-
-    # ---------------------
-    # Solve merged objects
-    sol_ola2 = solve_ivp(
-        odf.oneD_finger_n_obj_merged,
-        [sol_ola.t_events[-1][0], 10],
-        # [y_ev[0], v_cm, y_ev[2], v_cm],
-        [y_ev[0], y_ev[1], v_cm, v_cm, v_cm],
-        dense_output=True,
-        # method="LSODA",
-        # first_step=0.1,
-        events=odf.decel,
-    )
-
-    print("sol_ola2 events: ", sol_ola2.t_events)
-
-    t2 = np.linspace(sol_ola2.t[0], sol_ola2.t[-1], 20)
-    z2 = sol_ola2.sol(t2)
-
-    # calculate unmerger
-    y_ev = sol_ola2.y_events[-1][0]
-    # v_cm = 0.5 * (y_ev[1] + y_ev[3])
-    v_cm = y_ev[4]
-
-    # ---------------------
-    # Solve unmerged objects
-    sol_ola3 = solve_ivp(
-        odf.oneD_finger_n_obj,
-        [sol_ola2.t_events[-1][0], 10],
-        # [y_ev[0], v_cm, y_ev[2], v_cm],
-        [y_ev[0], y_ev[1], v_cm, v_cm, v_cm],
-        dense_output=True,
-        # method="LSODA",
-        # first_step=0.1,
-        events=odf.touch,
-    )
-
-    print("sol_ola3 events: ", sol_ola3.t_events)
-    print("sol_ola3 yevents: ", sol_ola3.y_events)
-
-    t3 = np.linspace(sol_ola3.t[0], sol_ola3.t[-1], 40)
-    z3 = sol_ola3.sol(t3)
-
-    # calculate merger
-    y_ev = sol_ola3.y_events[-1][0]
-    v_cm = 0.5 * (y_ev[2] + y_ev[3])
-
-    ## Calculating this merger depends on if the contact force, F_s = F_a - F_d - F_f > 0.
-    ## If F_s <= 0 (i.e. coasting), then this merger should be a semi-elastic bounce
-    ##  and the next equation should be the same: odf.oneD_finger_n_obj, i.e. solving two
-    ## distinct objects again.
-
-    ## As it is, the force is still on, so the following solve of merged eqns is correct.
-
-    # ---------------------
-    # Solve merged objects
-    sol_ola4 = solve_ivp(
-        odf.oneD_finger_n_obj_merged,
-        [sol_ola3.t_events[-1][0], 10],
-        # [y_ev[0], v_cm, y_ev[2], v_cm],
-        [y_ev[0], y_ev[1], v_cm, v_cm, v_cm],
-        dense_output=True,
-        # method="LSODA",
-        # first_step=0.1,
-        events=odf.decel,
-    )
-
-    print("sol_ola4 events: ", sol_ola4.t_events)
-
-    t4 = np.linspace(sol_ola4.t[0], sol_ola4.t[-1], 20)
-    z4 = sol_ola4.sol(t4)
-
-    plt.plot(np.hstack([t, t2, t3, t4]), np.hstack([z, z2, z3, z4]).T)
+    plt.grid(True)
+    plt.plot(t, y.T)
+    plt.plot(t, odf.F_a(t), "--")
+    plt.plot(t, odf.F_sensor_func(t, y), "-")
 
     # plt.legend()
     plt.show()
