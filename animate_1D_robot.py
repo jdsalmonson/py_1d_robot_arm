@@ -16,6 +16,29 @@ def F_a(self, t, t0=1.0, t1=5.0):
     ) * heaviside(7.5 - t, 0.5)
 
 
+def F_a(self, t):
+    """a particular applied force profile"""
+    kind = "linear"  # 'cubic'
+    end_first_push = 2.0  # 4.0
+    f_a = interp1d(
+        [
+            0.0,
+            1.0,
+            end_first_push,
+            end_first_push + 1.2,
+            5.0 - 0.0 * 1.0,
+            6.0,
+            7.0,
+            8.0,
+            12.0,
+        ],
+        [0.0, 0.5, 0.5, 0.0, 0.0, 1.1, 1.1, 0.0, 0.0],
+        kind=kind,
+    )(t)
+
+    return f_a
+
+
 OneDFinger.F_a = F_a
 
 f_kinetic = 0.4
@@ -56,7 +79,7 @@ patches.append(rect)
 
 collection = clt.PatchCollection(patches)
 axa.add_collection(collection)
-axa.set_xlim((x_min - 0.5 - e_x, x_max + 0.5))
+axa.set_xlim((x_min - 0.5 - e_x, x_max + 1.0))
 axa.set_ylim((-1, 1))
 axa.set_aspect("equal")
 axa.get_yaxis().set_visible(False)
@@ -115,7 +138,7 @@ anim = animation.FuncAnimation(
     blit=False,
 )
 
-save_as = "gif"  # "html"  # "gif"
+save_as = ""  # gif"  # "html"  # "gif"
 if save_as == "html":
     # Make HTML output: -------------------
     from matplotlib.animation import HTMLWriter

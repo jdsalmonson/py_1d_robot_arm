@@ -23,6 +23,7 @@ class OneDFinger:
         v_o_atol=1.0e-3,
         t_i: float = 0.0,
         t_f: float = 10.0,
+        y0: np.ndarray = np.array([0.0, 1.5, 0.0, 0.0, 0.0]),
         N: int = 20,
     ):
         """
@@ -48,6 +49,7 @@ class OneDFinger:
           v_o_atol (float) tolerance to determine if object is at rest, so that static friction is used.
           t_i (float) initial time to start integration
           t_f (float) final time to end integration
+          y0 (np.ndarray) initial values of [y_f, y_o, v_f, v_o, v_fo]
           N (int) number of points at which to evaluate each sub-solution
         """
 
@@ -66,8 +68,7 @@ class OneDFinger:
         self.N = N
 
         self.t0 = [t_i, t_f]
-        # initial values of [y_f, y_o, v_f, v_o, v_fo]
-        self.y0 = [0.0, 1.5, 0.0, 0.0, 0.0]
+        self.y0 = y0
 
         self.step_str = "{:<8.3} {:>15}: v_o0 = {:<8.3} F_i - F_F = {:<8.3}"
 
@@ -103,13 +104,9 @@ class OneDFinger:
         """
         x_f, x_o, _, v_o, v_fo = y
 
-        # This works to hold static friction.
-        # But for Merged, the object velocity eventually becomes non-static, so the object starts to move.
-        # v_tmp = min(abs(v_o), abs(v_fo))
         v_f = y[2 + v_idx]
 
-        # """
-        # vectorized version:
+        # vectorized:
         # If not touching, no friction.  Otherwise, friction matches positive incident force up to static friction limit.
         # Subtract x_merge_offset from x_o to make "touching" more fuzzy, and thus more robust.
         static_f = np.where(
@@ -121,27 +118,10 @@ class OneDFinger:
         f_f = np.where(
             np.isclose(v_f, 0.0, atol=atol),
             static_f,
-            self.f_kinetic * static_f + self.K_o_drag * v_o,  # v_f  # v_o
+            self.f_kinetic * static_f + self.K_o_drag * v_o,
         )
         vf_f = f_f
 
-        # return f_f
-        # """
-        """
-        if math.isclose(v_f, 0.0, abs_tol=atol):  # v_o == 0.0:
-            # If not touching, no friction:
-            if x_f < x_o - self.x_merge_offset:
-                sf_f = 0.0  # return 0.0
-            else:
-                sf_f = min(self.F_static, F_i)  # return min(self.F_static, F_i)
-        else:
-            sf_f = self.F_kinetic * v_f  # return self.F_kinetic * v_o
-
-        if sf_f != vf_f:
-            print(
-                f"sf_f: {sf_f:.5}, vf_f: {vf_f:.5} x_f: {x_f:.5}, x_o: {x_o:.5}, v_o: {v_o:.5}, F_i: {F_i:.5}"
-            )
-        """
         return vf_f
 
     def F_sensor_func(self, t, y):
@@ -218,8 +198,8 @@ class OneDFinger:
             if vt_cm[i_m + 1] == 0.0:
                 # If the object is immovable due to static friction, then it is effectively infinite mass,
                 # so the impulse velocity change is just the finger velocity before the merger: y[2],
-                # since the finger velocity after merger is 0.0,
-                # so set center-of-momentum velocity of merger to 0.0:
+                # since the finger velocity after merger is 0.0.
+                # So set center-of-momentum velocity of merger to 0.0:
                 print(f"{i_m} merger cm velocity = 0.0")
                 vt_cm[i_m] = 0.0
             f_sensor_merge = (
@@ -247,11 +227,10 @@ class OneDFinger:
         # v' of object:
         v_op = -self.F_friction(y, np.Inf, v_idx=1) / self.m_object
 
-        # v' of finger + object:
-        # v_fop = (max(0.0, self.F_a(t) - self.F_d(y[2])) - F_f) / (self.m_finger + self.m_object)
+        # v' (acceleration) of finger + object:
         v_fop = (F_i - F_f) / (self.m_finger + self.m_object)
 
-        return [y[2], y[3], v_fp, v_op, v_fop]  # [y[1], y1p, y[3], y3p]
+        return [y[2], y[3], v_fp, v_op, v_fop]
 
     # @staticmethod
     def touch(self, t: float, y: list) -> float:
@@ -276,14 +255,10 @@ class OneDFinger:
         # v' (accleration) of finger:
         v_fp = (self.F_a(t) - self.F_d(v_drag)) / self.m_finger
 
-        # v' of object:
-        # v_op = -self.F_friction(y, np.Inf) / self.m_object
+        # v' (acceleration) of object:
         v_op = -self.F_friction(y, F_i, v_idx=2) / self.m_object
 
-        # v_fop = (max(0.0, self.F_a(t) - self.F_d(y[2])) - F_f) / (
-        #    self.m_finger + self.m_object
-        # )
-        # v' of finger + object:
+        # v' (acceleration) of finger + object:
         v_fop = (F_i - F_f) / (self.m_finger + self.m_object)
 
         # print(
@@ -301,30 +276,6 @@ class OneDFinger:
 
         # Since decel() is only called when f+o are merged, use y[4] for v_fop, instead of y[2] for v_fp:
         F_i = self.F_a(t) - self.F_d(y[4])
-
-        # Delete this: ***************
-        # Setting incident force fed to F_f to np.Inf allows F_i - F_f to swing thru zero:
-        F_f = self.F_friction(
-            y, F_i=np.Inf, v_idx=1, atol=1.0e-4
-        )  # F_i)  # np.Inf)  # F_i)
-
-        """         
-        print(
-            "decel",
-            t,
-            y,
-            F_i,
-            F_f,
-        )
-        """
-
-        if math.isclose(y[4], 0.0, abs_tol=1.0e-5):
-            foo = 1.0
-        else:
-            foo = F_i - F_f
-        # print(
-        #    f" >decel {t:.5} {y} F_i = {F_i:.5} F_F = {F_f:.5} F_i - F_F = {(F_i - F_f):.5} foo = {foo}"
-        # )
 
         # Subtract small value so zero-crossing is slightly in tension, thus f+o touching w/o force won't be flagged:
         return F_i - 1.0e-5  # 1.0  # F_i - F_f + 1.0e-5  # foo
@@ -423,7 +374,7 @@ class OneDFinger:
                 + f"  x_f0 = {x_f0:.3}, x_o0 = {x_o0:.3}, v_f0 = {v_f0:.5}, v_o0 = {v_o0:.5}, v_fo0 = {v_fo0:.5}"
             )
             # velocity of merged finger and object
-            v_cm = v_fo0  # y0[4]
+            v_cm = v_fo0
             ode = self.oneD_finger_n_obj
             t_range = t0
             y_init = [x_f0 - self.x_merge_offset, x_o0, v_cm, v_cm, v_cm]
@@ -437,7 +388,7 @@ class OneDFinger:
             y_init,
             dense_output=True,
             events=events,
-            # vectorized=True,
+            vectorized=True,
         )
 
         if len(sol_ola.t_events[0]):
