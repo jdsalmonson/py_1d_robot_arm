@@ -67,7 +67,7 @@ axf = axs[2]
 
 patches = []
 e_x = 1.0
-e = Ellipse((x_f[0] - 0.5 * e_x, 0.0), e_x, 0.5, color="blue")
+e = Ellipse((x_f[0] - 0.5 * e_x, 0.0), e_x, 0.5, color="peachpuff")
 rect = Rectangle(
     (x_o[0], -0.5),
     0.5,
@@ -85,12 +85,14 @@ axa.set_aspect("equal")
 axa.get_yaxis().set_visible(False)
 
 # position plot
-axp.plot(t, y[0, :].T, color="blue")
-axp.plot(t, y[1, :].T, color="green")
+axp.plot(t, y[0, :].T, color="sandybrown", label="finger")
+axp.plot(t, y[1, :].T, color="green", label="object")
 vl = axp.axvline(times[0], color="red")
-(xfp,) = axp.plot(times[0], x_f[0], "o", color="blue")
+(xfp,) = axp.plot(times[0], x_f[0], "o", mfc="peachpuff", color="sandybrown")
 (xop,) = axp.plot(times[0], x_o[0], "o", color="green")
 axp.grid(True)
+axp.legend(loc="lower right")
+axp.set_ylabel("position [m]")
 
 # force plot
 axf.plot(t, interp_f_sensor(t), "-", color="magenta", label="F_sensor")
@@ -100,7 +102,8 @@ vlf = axf.axvline(times[0], color="red")
 (fap,) = axf.plot(times[0], odf.F_a(times[0]), "o", color="cyan")
 axf.grid(True)
 axf.legend(loc="upper right")
-axf.set_xlabel("time (s)")
+axf.set_ylabel("force [N]")
+axf.set_xlabel("time [s]")
 
 
 def animate(i):
@@ -117,7 +120,8 @@ def animate(i):
     patches.append(e)
     patches.append(rect)
     collection.set_paths(patches)
-    collection.set_facecolors(["blue", "green"])
+    collection.set_edgecolors(["sandybrown", "green"])
+    collection.set_facecolors(["peachpuff", "green"])
 
     # update the position plot
     vl.set_xdata([times[i], times[i]])
