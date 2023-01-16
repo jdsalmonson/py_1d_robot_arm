@@ -6,7 +6,7 @@ from scipy.integrate import solve_ivp
 
 import matplotlib.pyplot as plt
 
-from rich import print
+# from rich import print
 
 
 class OneDFinger:
@@ -46,7 +46,7 @@ class OneDFinger:
           F_static (float) static friction force when object is at rest
           f_kinetic (float) factor multiplied by incident force when object is moving to get kinetic friction force
           x_merge_offset (float) seperate f & o when they merge or bounce under tension
-          v_o_atol (float) tolerance to determine if object is at rest, so that static friction is used.
+          v_o_atol (float) tolerance to determine if object is at rest, in which case static friction is used.
           t_i (float) initial time to start integration
           t_f (float) final time to end integration
           y0 (np.ndarray) initial values of [y_f, y_o, v_f, v_o, v_fo]
